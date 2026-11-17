@@ -12,6 +12,15 @@ namespace FutebolSimuladorMaui
             float y = campo.Y + (campo.Height - altura) / 2;
             return new RectF(x, y, largura, altura);
         }
+
+        public static RectF CalcularPequenaArea(RectF campo, bool ladoEsquerdo)
+        {
+            float largura = campo.Width * 0.055f;
+            float altura = campo.Height * 0.40f;
+            float x = ladoEsquerdo ? campo.X : campo.X + campo.Width - largura;
+            float y = campo.Y + (campo.Height - altura) / 2;
+            return new RectF(x, y, largura, altura);
+        }
     }
 
     public enum PosicaoJogador
@@ -59,14 +68,18 @@ namespace FutebolSimuladorMaui
 
             // Gols
             float golY = CampoY + (CampoAltura - 140) / 2;
-            canvas.DrawRectangle(CampoX - 10, golY, 10, 140);
-            canvas.DrawRectangle(CampoX + CampoLargura, golY, 10, 140);
+            DesenharGol(canvas, CampoX - 18, golY);
+            DesenharGol(canvas, CampoX + CampoLargura, golY);
 
             var campo = new RectF(CampoX, CampoY, CampoLargura, CampoAltura);
             var grandeAreaCasa = CampoFutebol.CalcularGrandeArea(campo, ladoEsquerdo: true);
             var grandeAreaVisitante = CampoFutebol.CalcularGrandeArea(campo, ladoEsquerdo: false);
+            var pequenaAreaCasa = CampoFutebol.CalcularPequenaArea(campo, ladoEsquerdo: true);
+            var pequenaAreaVisitante = CampoFutebol.CalcularPequenaArea(campo, ladoEsquerdo: false);
             canvas.DrawRectangle(grandeAreaCasa.X, grandeAreaCasa.Y, grandeAreaCasa.Width, grandeAreaCasa.Height);
             canvas.DrawRectangle(grandeAreaVisitante.X, grandeAreaVisitante.Y, grandeAreaVisitante.Width, grandeAreaVisitante.Height);
+            canvas.DrawRectangle(pequenaAreaCasa.X, pequenaAreaCasa.Y, pequenaAreaCasa.Width, pequenaAreaCasa.Height);
+            canvas.DrawRectangle(pequenaAreaVisitante.X, pequenaAreaVisitante.Y, pequenaAreaVisitante.Width, pequenaAreaVisitante.Height);
 
             // 2. Placar e Tempo
             canvas.FontColor = Colors.Black;
@@ -92,6 +105,27 @@ namespace FutebolSimuladorMaui
             {
                 foreach (var j in TimeVisitante) j.Desenhar(canvas);
             }
+        }
+
+        private static void DesenharGol(ICanvas canvas, float x, float y)
+        {
+            const float profundidade = 18;
+            const float altura = 140;
+
+            canvas.FillColor = Colors.White;
+            canvas.FillRectangle(x, y, profundidade, altura);
+            canvas.StrokeColor = Colors.DarkSlateGray;
+            canvas.StrokeSize = 3;
+            canvas.DrawRectangle(x, y, profundidade, altura);
+
+            canvas.StrokeColor = Colors.LightGray;
+            canvas.StrokeSize = 1;
+            for (int linha = 1; linha < 4; linha++)
+            {
+                float linhaY = y + altura * linha / 4;
+                canvas.DrawLine(x, linhaY, x + profundidade, linhaY);
+            }
+            canvas.DrawLine(x + profundidade / 2, y, x + profundidade / 2, y + altura);
         }
     }
 
@@ -126,8 +160,11 @@ namespace FutebolSimuladorMaui
         public PosicaoJogador Posicao { get; }
         public int Habilidade { get; }
         public bool DefendeLadoEsquerdo { get; }
+        public float PosicaoInicialX => posicaoInicialX;
+        public float PosicaoInicialY => posicaoInicialY;
         private readonly float posicaoInicialX;
         private readonly float posicaoInicialY;
+        private bool estaVoltandoParaPequenaArea;
         private float velocidadeMovimento => 0.9f + Habilidade / 100f * 1.8f;
 
         public Jogador(float x, float y, Color cor, PosicaoJogador posicao, int habilidade, bool defendeLadoEsquerdo)
@@ -143,8 +180,36 @@ namespace FutebolSimuladorMaui
             DefendeLadoEsquerdo = defendeLadoEsquerdo;
         }
 
-        public void MoverEmDirecao(float alvoX, float alvoY, RectF campo)
+        public void MoverEmDirecao(float alvoX, float alvoY, RectF campo, float bolaX)
         {
+            if (Posicao == PosicaoJogador.Goleiro &&
+                !BolaNoCampoAdversario(bolaX, campo) &&
+                (estaVoltandoParaPequenaArea || !EstaDentroDaPequenaArea(campo)))
+            {
+                estaVoltandoParaPequenaArea = true;
+                var pequenaArea = CampoFutebol.CalcularPequenaArea(campo, DefendeLadoEsquerdo);
+                float alvoRetornoX = Math.Clamp(X, pequenaArea.X + Raio, pequenaArea.X + pequenaArea.Width - Raio);
+                float alvoRetornoY = Math.Clamp(Y, pequenaArea.Y + Raio, pequenaArea.Y + pequenaArea.Height - Raio);
+                float dxRetorno = alvoRetornoX - X;
+                float dyRetorno = alvoRetornoY - Y;
+                float distanciaRetorno = (float)Math.Sqrt(dxRetorno * dxRetorno + dyRetorno * dyRetorno);
+
+                if (distanciaRetorno > velocidadeMovimento)
+                {
+                    X += dxRetorno / distanciaRetorno * velocidadeMovimento;
+                    Y += dyRetorno / distanciaRetorno * velocidadeMovimento;
+                }
+                else
+                {
+                    X = alvoRetornoX;
+                    Y = alvoRetornoY;
+                    estaVoltandoParaPequenaArea = false;
+                }
+
+                AplicarLimites(campo, bolaX);
+                return;
+            }
+
             float dx = alvoX - X;
             float dy = alvoY - Y;
             float distancia = (float)Math.Sqrt(dx * dx + dy * dy);
@@ -155,10 +220,10 @@ namespace FutebolSimuladorMaui
                 Y += (dy / distancia) * velocidadeMovimento;
             }
 
-            AplicarLimites(campo);
+            AplicarLimites(campo, bolaX);
         }
 
-        public void AplicarLimites(RectF campo)
+        public void AplicarLimites(RectF campo, float bolaX)
         {
             float limiteMinimoX = campo.X + Raio;
             float limiteMaximoX = campo.X + campo.Width - Raio;
@@ -167,11 +232,20 @@ namespace FutebolSimuladorMaui
 
             if (Posicao == PosicaoJogador.Goleiro)
             {
-                var grandeArea = CampoFutebol.CalcularGrandeArea(campo, DefendeLadoEsquerdo);
-                limiteMinimoX = grandeArea.X + Raio;
-                limiteMaximoX = grandeArea.X + grandeArea.Width - Raio;
-                limiteMinimoY = grandeArea.Y + Raio;
-                limiteMaximoY = grandeArea.Y + grandeArea.Height - Raio;
+                bool bolaNoCampoAdversario = BolaNoCampoAdversario(bolaX, campo);
+                if (bolaNoCampoAdversario)
+                    estaVoltandoParaPequenaArea = false;
+                else if (!estaVoltandoParaPequenaArea && !EstaDentroDaPequenaArea(campo))
+                    estaVoltandoParaPequenaArea = true;
+
+                var areaPermitida = bolaNoCampoAdversario
+                    || estaVoltandoParaPequenaArea
+                    ? CampoFutebol.CalcularGrandeArea(campo, DefendeLadoEsquerdo)
+                    : CampoFutebol.CalcularPequenaArea(campo, DefendeLadoEsquerdo);
+                limiteMinimoX = areaPermitida.X + Raio;
+                limiteMaximoX = areaPermitida.X + areaPermitida.Width - Raio;
+                limiteMinimoY = areaPermitida.Y + Raio;
+                limiteMaximoY = areaPermitida.Y + areaPermitida.Height - Raio;
             }
             else if (EhDefensor)
             {
@@ -197,6 +271,21 @@ namespace FutebolSimuladorMaui
 
             X = Math.Clamp(X, limiteMinimoX, limiteMaximoX);
             Y = Math.Clamp(Y, limiteMinimoY, limiteMaximoY);
+        }
+
+        private bool BolaNoCampoAdversario(float bolaX, RectF campo)
+        {
+            float linhaDoMeio = campo.X + campo.Width / 2;
+            return DefendeLadoEsquerdo ? bolaX > linhaDoMeio : bolaX < linhaDoMeio;
+        }
+
+        private bool EstaDentroDaPequenaArea(RectF campo)
+        {
+            var area = CampoFutebol.CalcularPequenaArea(campo, DefendeLadoEsquerdo);
+            return X >= area.X + Raio &&
+                X <= area.X + area.Width - Raio &&
+                Y >= area.Y + Raio &&
+                Y <= area.Y + area.Height - Raio;
         }
 
         private bool EhDefensor => Posicao is

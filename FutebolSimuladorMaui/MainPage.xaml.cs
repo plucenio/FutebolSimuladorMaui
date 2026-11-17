@@ -15,6 +15,8 @@ namespace FutebolSimuladorMaui
         private Bola bola;
         private List<Jogador> timeCasa;
         private List<Jogador> timeVisitante;
+        private List<Jogador>? timeComPosse;
+        private Jogador? jogadorComPosse;
         private RectF campoBounds;
         private FutebolDrawable drawable;
 
@@ -83,7 +85,7 @@ namespace FutebolSimuladorMaui
 
             (float X, float Y, PosicaoJogador Posicao)[] formacao =
             {
-                (0.04f, 0.50f, PosicaoJogador.Goleiro),
+                (0.03f, 0.50f, PosicaoJogador.Goleiro),
                 (0.18f, zagueiroEsquerdo, PosicaoJogador.ZagueiroEsquerdo),
                 (0.18f, zagueiroDireito, PosicaoJogador.ZagueiroDireito),
                 (0.16f, faixaEsquerda, PosicaoJogador.LateralEsquerdo),
@@ -125,19 +127,144 @@ namespace FutebolSimuladorMaui
                 ReiniciarPosicoes();
             }
 
-            // Movimentação dos Jogadores
-            foreach (var j in timeCasa) j.MoverEmDirecao(bola.X, bola.Y, campoBounds);
-            foreach (var j in timeVisitante) j.MoverEmDirecao(bola.X, bola.Y, campoBounds);
+            AtualizarPosse();
+            Jogador? jogadorPressionando = null;
+
+            if (timeComPosse is not null && jogadorComPosse is not null)
+            {
+                var timeDefendendo = ReferenceEquals(timeComPosse, timeCasa) ? timeVisitante : timeCasa;
+                jogadorPressionando = EncontrarMaisProximo(timeDefendendo);
+                MoverTime(timeComPosse, jogadorComPosse, temPosse: true);
+                MoverTime(timeDefendendo, jogadorPressionando, temPosse: false);
+            }
+            else
+            {
+                var jogadorCasaProximo = EncontrarMaisProximo(timeCasa);
+                var jogadorVisitanteProximo = EncontrarMaisProximo(timeVisitante);
+                MoverTime(timeCasa, jogadorCasaProximo, temPosse: false);
+                MoverTime(timeVisitante, jogadorVisitanteProximo, temPosse: false);
+            }
+
             EvitarSobreposicaoEntreJogadores();
 
-            VerificarChutes(timeCasa);
-            VerificarChutes(timeVisitante);
+            Jogador jogadorBolaCasa = timeComPosse is null
+                ? EncontrarMaisProximo(timeCasa)
+                : ReferenceEquals(timeComPosse, timeCasa) ? jogadorComPosse! : jogadorPressionando!;
+            Jogador jogadorBolaVisitante = timeComPosse is null
+                ? EncontrarMaisProximo(timeVisitante)
+                : ReferenceEquals(timeComPosse, timeVisitante) ? jogadorComPosse! : jogadorPressionando!;
+            if (!VerificarChute(jogadorBolaCasa))
+                VerificarChute(jogadorBolaVisitante);
 
             // Atualizar tela na thread principal
             MainThread.BeginInvokeOnMainThread(() =>
             {
                 myGraphicsView.Invalidate();
             });
+        }
+
+        private void AtualizarPosse()
+        {
+            var jogadorCasaProximo = EncontrarMaisProximo(timeCasa);
+            var jogadorVisitanteProximo = EncontrarMaisProximo(timeVisitante);
+            float distanciaCasa = DistanciaAteBola(jogadorCasaProximo);
+            float distanciaVisitante = DistanciaAteBola(jogadorVisitanteProximo);
+            Jogador candidato = distanciaCasa <= distanciaVisitante ? jogadorCasaProximo : jogadorVisitanteProximo;
+            float distanciaCandidato = Math.Min(distanciaCasa, distanciaVisitante);
+
+            if (distanciaCandidato <= candidato.Raio + bola.Raio + 6)
+            {
+                timeComPosse = timeCasa.Contains(candidato) ? timeCasa : timeVisitante;
+                jogadorComPosse = candidato;
+            }
+            else if (timeComPosse is null)
+            {
+                jogadorComPosse = null;
+            }
+            else if (jogadorComPosse is null)
+            {
+                jogadorComPosse = EncontrarMaisProximo(timeComPosse);
+            }
+        }
+
+        private void MoverTime(List<Jogador> time, Jogador jogadorAlvoDaBola, bool temPosse)
+        {
+            foreach (var jogador in time)
+            {
+                (float X, float Y) alvo;
+                if (ReferenceEquals(jogador, jogadorAlvoDaBola))
+                    alvo = (bola.X, bola.Y);
+                else
+                    alvo = temPosse ? CalcularPosicaoDeApoio(jogador) : CalcularPosicaoDefensiva(jogador);
+
+                jogador.MoverEmDirecao(alvo.X, alvo.Y, campoBounds, bola.X);
+            }
+        }
+
+        private (float X, float Y) CalcularPosicaoDeApoio(Jogador jogador)
+        {
+            float direcaoAtaque = jogador.DefendeLadoEsquerdo ? 1 : -1;
+            float centroY = campoBounds.Y + campoBounds.Height / 2;
+            float deslocamentoFaixa = (jogador.PosicaoInicialY - centroY) * 0.75f
+                + (bola.Y - centroY) * 0.25f;
+            float alvoX = jogador.Posicao switch
+            {
+                PosicaoJogador.Goleiro => jogador.PosicaoInicialX,
+                PosicaoJogador.ZagueiroEsquerdo or PosicaoJogador.ZagueiroDireito =>
+                    jogador.PosicaoInicialX + direcaoAtaque * 12,
+                PosicaoJogador.LateralEsquerdo or PosicaoJogador.LateralDireito =>
+                    jogador.PosicaoInicialX + direcaoAtaque * 24,
+                PosicaoJogador.MeioCampo =>
+                    bola.X + direcaoAtaque * (85 + jogador.Habilidade * 0.25f),
+                PosicaoJogador.Atacante =>
+                    bola.X + direcaoAtaque * (100 + jogador.Habilidade * 0.35f),
+                _ => jogador.PosicaoInicialX
+            };
+            float alvoY = centroY + deslocamentoFaixa;
+
+            return (
+                Math.Clamp(alvoX, campoBounds.X + jogador.Raio, campoBounds.X + campoBounds.Width - jogador.Raio),
+                Math.Clamp(alvoY, campoBounds.Y + jogador.Raio, campoBounds.Y + campoBounds.Height - jogador.Raio));
+        }
+
+        private (float X, float Y) CalcularPosicaoDefensiva(Jogador jogador)
+        {
+            if (jogador.Posicao == PosicaoJogador.Goleiro)
+                return (jogador.PosicaoInicialX, jogador.PosicaoInicialY);
+
+            float centroX = campoBounds.X + campoBounds.Width / 2;
+            float centroY = campoBounds.Y + campoBounds.Height / 2;
+            float deslocamentoX = Math.Clamp((bola.X - centroX) * 0.12f, -45, 45);
+            float deslocamentoY = (bola.Y - centroY) * 0.20f;
+
+            return (
+                jogador.PosicaoInicialX + deslocamentoX,
+                centroY + (jogador.PosicaoInicialY - centroY) * 0.80f + deslocamentoY);
+        }
+
+        private Jogador EncontrarMaisProximo(List<Jogador> time)
+        {
+            Jogador maisProximo = time[0];
+            float menorDistancia = DistanciaAteBola(maisProximo);
+
+            foreach (var jogador in time.Skip(1))
+            {
+                float distancia = DistanciaAteBola(jogador);
+                if (distancia < menorDistancia)
+                {
+                    maisProximo = jogador;
+                    menorDistancia = distancia;
+                }
+            }
+
+            return maisProximo;
+        }
+
+        private float DistanciaAteBola(Jogador jogador)
+        {
+            float dx = jogador.X - bola.X;
+            float dy = jogador.Y - bola.Y;
+            return (float)Math.Sqrt(dx * dx + dy * dy);
         }
 
         private void EvitarSobreposicaoEntreJogadores()
@@ -177,8 +304,8 @@ namespace FutebolSimuladorMaui
                         primeiro.Y -= deslocamentoY;
                         segundo.X += deslocamentoX;
                         segundo.Y += deslocamentoY;
-                        primeiro.AplicarLimites(campoBounds);
-                        segundo.AplicarLimites(campoBounds);
+                        primeiro.AplicarLimites(campoBounds, bola.X);
+                        segundo.AplicarLimites(campoBounds, bola.X);
                     }
                 }
 
@@ -187,19 +314,17 @@ namespace FutebolSimuladorMaui
             }
         }
 
-        private void VerificarChutes(List<Jogador> time)
+        private bool VerificarChute(Jogador jogador)
         {
-            foreach (var j in time)
+            if (DistanciaAteBola(jogador) < 20)
             {
-                float distancia = (float)Math.Sqrt(Math.Pow(j.X - bola.X, 2) + Math.Pow(j.Y - bola.Y, 2));
-                if (distancia < 20)
-                {
-                    Random rnd = new Random();
-                    float angulo = (float)(rnd.NextDouble() * Math.PI * 2);
-                    bola.VelX = (float)Math.Cos(angulo) * 6f;
-                    bola.VelY = (float)Math.Sin(angulo) * 6f;
-                }
+                float angulo = (float)(Random.Shared.NextDouble() * Math.PI * 2);
+                bola.VelX = (float)Math.Cos(angulo) * 6f;
+                bola.VelY = (float)Math.Sin(angulo) * 6f;
+                return true;
             }
+
+            return false;
         }
 
         private void ReiniciarPosicoes()
@@ -208,6 +333,8 @@ namespace FutebolSimuladorMaui
             bola.Y = campoBounds.Y + campoBounds.Height / 2;
             bola.VelX = 0;
             bola.VelY = 0;
+            timeComPosse = null;
+            jogadorComPosse = null;
             InicializarPosicoesJogadores();
         }
 
