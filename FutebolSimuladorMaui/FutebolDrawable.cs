@@ -133,7 +133,7 @@ namespace FutebolSimuladorMaui
     {
         public float X, Y;
         public float VelX = 0, VelY = 0;
-        public float Raio = 8;
+        public float Raio = 4;
 
         public Bola(float x, float y) { X = x; Y = y; }
 
@@ -156,7 +156,7 @@ namespace FutebolSimuladorMaui
     {
         public float X, Y;
         public Color Cor;
-        public float Raio = 12;
+        public float Raio = 8.4f;
         public PosicaoJogador Posicao { get; }
         public int Habilidade { get; }
         public bool DefendeLadoEsquerdo { get; }
@@ -165,7 +165,7 @@ namespace FutebolSimuladorMaui
         private readonly float posicaoInicialX;
         private readonly float posicaoInicialY;
         private bool estaVoltandoParaPequenaArea;
-        private float velocidadeMovimento => 0.9f + Habilidade / 100f * 1.8f;
+        private float velocidadeMovimento => (0.9f + Habilidade / 100f * 1.8f) * 0.7f;
 
         public Jogador(float x, float y, Color cor, PosicaoJogador posicao, int habilidade, bool defendeLadoEsquerdo)
         {
