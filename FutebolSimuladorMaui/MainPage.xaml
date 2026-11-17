@@ -6,8 +6,8 @@
 
     <VerticalStackLayout Spacing="0" Padding="0">
         <GraphicsView x:Name="myGraphicsView" 
-                      WidthRequest="760" 
-                      HeightRequest="500" 
+                      WidthRequest="800" 
+                      HeightRequest="540" 
                       HorizontalOptions="Center" 
                       VerticalOptions="Center" />
     </VerticalStackLayout>

@@ -2,10 +2,25 @@ using Microsoft.Maui.Graphics;
 
 namespace FutebolSimuladorMaui
 {
+    public static class CampoFutebol
+    {
+        public static RectF CalcularGrandeArea(RectF campo, bool ladoEsquerdo)
+        {
+            float largura = campo.Width * 0.16f;
+            float altura = campo.Height * 0.60f;
+            float x = ladoEsquerdo ? campo.X : campo.X + campo.Width - largura;
+            float y = campo.Y + (campo.Height - altura) / 2;
+            return new RectF(x, y, largura, altura);
+        }
+    }
+
     public enum PosicaoJogador
     {
         Goleiro,
-        Defensor,
+        ZagueiroEsquerdo,
+        ZagueiroDireito,
+        LateralEsquerdo,
+        LateralDireito,
         MeioCampo,
         Atacante
     }
@@ -43,8 +58,15 @@ namespace FutebolSimuladorMaui
             canvas.DrawEllipse(CampoX + CampoLargura / 2 - 50, CampoY + CampoAltura / 2 - 50, 100, 100);
 
             // Gols
-            canvas.DrawRectangle(CampoX - 10, CampoY + 140, 10, 140);
-            canvas.DrawRectangle(CampoX + CampoLargura, CampoY + 140, 10, 140);
+            float golY = CampoY + (CampoAltura - 140) / 2;
+            canvas.DrawRectangle(CampoX - 10, golY, 10, 140);
+            canvas.DrawRectangle(CampoX + CampoLargura, golY, 10, 140);
+
+            var campo = new RectF(CampoX, CampoY, CampoLargura, CampoAltura);
+            var grandeAreaCasa = CampoFutebol.CalcularGrandeArea(campo, ladoEsquerdo: true);
+            var grandeAreaVisitante = CampoFutebol.CalcularGrandeArea(campo, ladoEsquerdo: false);
+            canvas.DrawRectangle(grandeAreaCasa.X, grandeAreaCasa.Y, grandeAreaCasa.Width, grandeAreaCasa.Height);
+            canvas.DrawRectangle(grandeAreaVisitante.X, grandeAreaVisitante.Y, grandeAreaVisitante.Width, grandeAreaVisitante.Height);
 
             // 2. Placar e Tempo
             canvas.FontColor = Colors.Black;
@@ -133,9 +155,25 @@ namespace FutebolSimuladorMaui
                 Y += (dy / distancia) * velocidadeMovimento;
             }
 
+            AplicarLimites(campo);
+        }
+
+        public void AplicarLimites(RectF campo)
+        {
             float limiteMinimoX = campo.X + Raio;
             float limiteMaximoX = campo.X + campo.Width - Raio;
-            if (Posicao == PosicaoJogador.Defensor)
+            float limiteMinimoY = campo.Y + Raio;
+            float limiteMaximoY = campo.Y + campo.Height - Raio;
+
+            if (Posicao == PosicaoJogador.Goleiro)
+            {
+                var grandeArea = CampoFutebol.CalcularGrandeArea(campo, DefendeLadoEsquerdo);
+                limiteMinimoX = grandeArea.X + Raio;
+                limiteMaximoX = grandeArea.X + grandeArea.Width - Raio;
+                limiteMinimoY = grandeArea.Y + Raio;
+                limiteMaximoY = grandeArea.Y + grandeArea.Height - Raio;
+            }
+            else if (EhDefensor)
             {
                 float linhaDoMeio = campo.X + campo.Width / 2;
                 if (DefendeLadoEsquerdo)
@@ -144,9 +182,28 @@ namespace FutebolSimuladorMaui
                     limiteMinimoX = Math.Max(limiteMinimoX, linhaDoMeio + Raio);
             }
 
+            if (Posicao is PosicaoJogador.LateralEsquerdo or PosicaoJogador.LateralDireito)
+            {
+                float linhaLateral = campo.Y + campo.Height / 2;
+                bool ficaNaFaixaSuperior = Posicao == PosicaoJogador.LateralEsquerdo
+                    ? DefendeLadoEsquerdo
+                    : !DefendeLadoEsquerdo;
+
+                if (ficaNaFaixaSuperior)
+                    limiteMaximoY = Math.Min(limiteMaximoY, linhaLateral - Raio);
+                else
+                    limiteMinimoY = Math.Max(limiteMinimoY, linhaLateral + Raio);
+            }
+
             X = Math.Clamp(X, limiteMinimoX, limiteMaximoX);
-            Y = Math.Clamp(Y, campo.Y + Raio, campo.Y + campo.Height - Raio);
+            Y = Math.Clamp(Y, limiteMinimoY, limiteMaximoY);
         }
+
+        private bool EhDefensor => Posicao is
+            PosicaoJogador.ZagueiroEsquerdo or
+            PosicaoJogador.ZagueiroDireito or
+            PosicaoJogador.LateralEsquerdo or
+            PosicaoJogador.LateralDireito;
 
         public void ReiniciarPosicao()
         {
@@ -170,7 +227,10 @@ namespace FutebolSimuladorMaui
         private string AbreviacaoPosicao() => Posicao switch
         {
             PosicaoJogador.Goleiro => "GK",
-            PosicaoJogador.Defensor => "DEF",
+            PosicaoJogador.ZagueiroEsquerdo => "ZCE",
+            PosicaoJogador.ZagueiroDireito => "ZCD",
+            PosicaoJogador.LateralEsquerdo => "LE",
+            PosicaoJogador.LateralDireito => "LD",
             PosicaoJogador.MeioCampo => "MID",
             PosicaoJogador.Atacante => "ATT",
             _ => throw new ArgumentOutOfRangeException(nameof(Posicao))
