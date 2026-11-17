@@ -5,7 +5,8 @@ namespace FutebolSimuladorMaui
 {
     public partial class MainPage : ContentPage
     {
-        private const float VelocidadePasse = 2.1f;
+        private const float MultiplicadorVelocidadeBola = 1.1f;
+        private const float MultiplicadorVelocidadePasse = 1.02f;
         private System.Timers.Timer gameTimer;
         private System.Timers.Timer relogioTimer;
         private int segundosRestantes = 45;
@@ -121,6 +122,9 @@ namespace FutebolSimuladorMaui
                 : (float)Math.Clamp((e.SignalTime - ultimaAtualizacaoDoJogo).TotalSeconds, 0, 0.1);
             ultimaAtualizacaoDoJogo = e.SignalTime;
 
+            foreach (var jogador in timeCasa.Concat(timeVisitante))
+                jogador.AtualizarInatividade(deltaSegundos);
+
             if (quadrosAteNovoPasse > 0)
                 quadrosAteNovoPasse--;
 
@@ -154,14 +158,27 @@ namespace FutebolSimuladorMaui
             {
                 var timeDefendendo = ReferenceEquals(timeComPosse, timeCasa) ? timeVisitante : timeCasa;
                 jogadorPressionando = EncontrarMaisProximo(timeDefendendo);
-                bool mesmoPortador = ReferenceEquals(jogadorComPosse, jogadorComTempoDePosse);
-                bool passeForcado = (ReferenceEquals(jogadorComPosse, jogadorRecuando) && tempoRecuando >= 2)
-                    || (mesmoPortador && tempoComPosseSegundos >= 2);
-                bool passePorTempo = mesmoPortador && tempoComPosseSegundos >= 1;
-                acaoComBolaRealizada = TentarPasse(jogadorPressionando, passeForcado, passePorTempo);
-                if (!acaoComBolaRealizada && DistanciaEntre(jogadorComPosse, jogadorPressionando) < 85)
-                    protegendoBola = true;
+                if (EstaNaPropriaLinhaDeFundo(jogadorComPosse))
+                {
+                    acaoComBolaRealizada = ChutarParaCompanheiroMaisProximo(jogadorComPosse);
+                }
+                else
+                {
+                    bool mesmoPortador = ReferenceEquals(jogadorComPosse, jogadorComTempoDePosse);
+                    bool passeForcado = (ReferenceEquals(jogadorComPosse, jogadorRecuando) && tempoRecuando >= 2)
+                        || (mesmoPortador && tempoComPosseSegundos >= 2);
+                    bool passePorTempo = mesmoPortador && tempoComPosseSegundos >= 1;
+                    acaoComBolaRealizada = TentarPasse(passeForcado, passePorTempo);
+                    if (!acaoComBolaRealizada && DistanciaEntre(jogadorComPosse, jogadorPressionando) < 85)
+                        protegendoBola = true;
+                }
 
+            }
+
+            if (timeComPosse is not null && jogadorComPosse is not null)
+            {
+                var timeDefendendo = ReferenceEquals(timeComPosse, timeCasa) ? timeVisitante : timeCasa;
+                jogadorPressionando ??= EncontrarMaisProximo(timeDefendendo);
                 portadorNesteQuadro = jogadorComPosse;
                 posicaoXInicialDoPortador = portadorNesteQuadro.X;
                 MoverTime(timeComPosse, jogadorComPosse, temPosse: true,
@@ -197,19 +214,23 @@ namespace FutebolSimuladorMaui
 
             if (protegendoBola && jogadorComPosse is not null && jogadorPressionando is not null)
                 ProtegerBola(jogadorComPosse, jogadorPressionando);
+            else if (!acaoComBolaRealizada && jogadorComPosse is not null &&
+                DistanciaAteBola(jogadorComPosse) <= jogadorComPosse.Raio + bola.Raio)
+                ConduzirBola(jogadorComPosse);
 
             bool bolaChutada = false;
             if (!acaoComBolaRealizada && !protegendoBola)
             {
-                Jogador jogadorBolaCasa = timeComPosse is null
-                    ? EncontrarMaisProximo(timeCasa)
-                    : ReferenceEquals(timeComPosse, timeCasa) ? jogadorComPosse! : jogadorPressionando!;
-                Jogador jogadorBolaVisitante = timeComPosse is null
-                    ? EncontrarMaisProximo(timeVisitante)
-                    : ReferenceEquals(timeComPosse, timeVisitante) ? jogadorComPosse! : jogadorPressionando!;
-                bolaChutada = VerificarChute(jogadorBolaCasa);
-                if (!bolaChutada)
-                    bolaChutada = VerificarChute(jogadorBolaVisitante);
+                if (timeComPosse is null)
+                {
+                    bolaChutada = VerificarChute(EncontrarMaisProximo(timeCasa));
+                    if (!bolaChutada)
+                        bolaChutada = VerificarChute(EncontrarMaisProximo(timeVisitante));
+                }
+                else if (jogadorPressionando is not null)
+                {
+                    bolaChutada = VerificarChute(jogadorPressionando);
+                }
             }
 
             AtualizarTemporizadorPosse(deltaSegundos, acaoComBolaRealizada || bolaChutada);
@@ -230,9 +251,16 @@ namespace FutebolSimuladorMaui
             Jogador candidato = distanciaCasa <= distanciaVisitante ? jogadorCasaProximo : jogadorVisitanteProximo;
             float distanciaCandidato = Math.Min(distanciaCasa, distanciaVisitante);
 
-            if (distanciaCandidato <= candidato.Raio + bola.Raio)
+            if (!candidato.EstaInativo && distanciaCandidato <= candidato.Raio + bola.Raio)
             {
-                timeComPosse = timeCasa.Contains(candidato) ? timeCasa : timeVisitante;
+                var novoTimeComPosse = timeCasa.Contains(candidato) ? timeCasa : timeVisitante;
+                if (timeComPosse is not null && jogadorComPosse is not null &&
+                    !ReferenceEquals(timeComPosse, novoTimeComPosse))
+                {
+                    jogadorComPosse.InativarPor(1);
+                }
+
+                timeComPosse = novoTimeComPosse;
                 jogadorComPosse = candidato;
             }
             else if (timeComPosse is null)
@@ -255,9 +283,14 @@ namespace FutebolSimuladorMaui
             {
                 (float X, float Y) alvo;
                 if (ReferenceEquals(jogador, jogadorAlvoDaBola))
-                    alvo = adversarioParaProtecao is null
-                        ? (bola.X, bola.Y)
-                        : CalcularPosicaoDeProtecao(jogador, adversarioParaProtecao);
+                {
+                    if (adversarioParaProtecao is not null)
+                        alvo = CalcularPosicaoDeProtecao(jogador, adversarioParaProtecao);
+                    else if (temPosse && DistanciaAteBola(jogador) <= jogador.Raio + bola.Raio)
+                        alvo = CalcularAlvoDeConducao(jogador);
+                    else
+                        alvo = (bola.X, bola.Y);
+                }
                 else
                     alvo = temPosse ? CalcularPosicaoDeApoio(jogador) : CalcularPosicaoDefensiva(jogador);
 
@@ -265,28 +298,31 @@ namespace FutebolSimuladorMaui
             }
         }
 
-        private bool TentarPasse(
-            Jogador jogadorPressionando,
-            bool passeForcado = false,
-            bool passePorTempo = false)
+        private bool TentarPasse(bool passeForcado = false, bool passePorTempo = false)
         {
             if (timeComPosse is null || jogadorComPosse is null)
                 return false;
 
             bool bolaPertoDoCanto = EstaPertoDoCanto();
-            if (!passeForcado && !passePorTempo &&
-                (quadrosAteNovoPasse > 0 ||
-                 (DistanciaEntre(jogadorComPosse, jogadorPressionando) >= 85 && !bolaPertoDoCanto)))
+            if (!passeForcado && !passePorTempo && quadrosAteNovoPasse > 0)
                 return false;
 
             var adversarios = ReferenceEquals(timeComPosse, timeCasa) ? timeVisitante : timeCasa;
             Jogador? recebedor = null;
-            float maiorPontuacao = passeForcado || passePorTempo ? float.NegativeInfinity : 45;
+            float maiorPontuacao = float.NegativeInfinity;
             (float X, float Y) alvoPasse = default;
+            float alvoGolX = jogadorComPosse.DefendeLadoEsquerdo
+                ? campoBounds.X + campoBounds.Width
+                : campoBounds.X;
+            float alvoGolY = campoBounds.Y + campoBounds.Height / 2;
+            float distanciaPortadorAteGol = DistanciaEntrePontos(
+                jogadorComPosse.X, jogadorComPosse.Y, alvoGolX, alvoGolY);
 
             foreach (var candidato in timeComPosse)
             {
-                if (ReferenceEquals(candidato, jogadorComPosse) || candidato.Posicao == PosicaoJogador.Goleiro)
+                if (ReferenceEquals(candidato, jogadorComPosse) ||
+                    candidato.EstaInativo ||
+                    candidato.Posicao == PosicaoJogador.Goleiro)
                     continue;
 
                 var alvo = CalcularPosicaoDeApoio(candidato);
@@ -300,13 +336,19 @@ namespace FutebolSimuladorMaui
                     continue;
 
                 float progresso = (alvo.X - bola.X) * (jogadorComPosse.DefendeLadoEsquerdo ? 1 : -1);
-                float pontuacao = candidato.Habilidade * 0.45f
-                    + Math.Min(distanciaAdversario, 130) * 0.45f
+                float distanciaCandidatoAteGol = DistanciaEntrePontos(alvo.X, alvo.Y, alvoGolX, alvoGolY);
+                float vantagemAteGol = distanciaPortadorAteGol - distanciaCandidatoAteGol;
+                if (!passeForcado && vantagemAteGol <= 0)
+                    continue;
+
+                float pontuacao = candidato.Habilidade * 0.25f
+                    + Math.Min(distanciaAdversario, 130) * 0.40f
                     + Math.Clamp(progresso, -100, 180) * 0.25f
+                    + Math.Clamp(vantagemAteGol, -100, 180) * 0.65f
                     - distanciaPasse * 0.10f;
 
                 if (progresso < 0)
-                    pontuacao -= 10;
+                    pontuacao -= 20;
 
                 if (pontuacao > maiorPontuacao)
                 {
@@ -330,8 +372,9 @@ namespace FutebolSimuladorMaui
             float distancia = (float)Math.Sqrt(dx * dx + dy * dy);
             if (distancia >= 1)
             {
-                bola.VelX = dx / distancia * VelocidadePasse;
-                bola.VelY = dy / distancia * VelocidadePasse;
+                float velocidade = jogadorComPosse.VelocidadeMovimento * MultiplicadorVelocidadePasse;
+                bola.VelX = dx / distancia * velocidade;
+                bola.VelY = dy / distancia * velocidade;
             }
 
             jogadorComPosse = recebedor;
@@ -362,11 +405,65 @@ namespace FutebolSimuladorMaui
             float dy = alvoY - bola.Y;
             float distancia = (float)Math.Sqrt(dx * dx + dy * dy);
 
-            bola.VelX = dx / distancia * 7f;
-            bola.VelY = dy / distancia * 7f;
+            float velocidade = portador.VelocidadeMovimento * MultiplicadorVelocidadeBola;
+            bola.VelX = dx / distancia * velocidade;
+            bola.VelY = dy / distancia * velocidade;
             quadrosAteNovoPasse = 40;
             jogadorRecuando = null;
             tempoRecuando = 0;
+        }
+
+        private bool EstaNaPropriaLinhaDeFundo(Jogador jogador)
+        {
+            float linhaDeFundo = jogador.DefendeLadoEsquerdo
+                ? campoBounds.X
+                : campoBounds.X + campoBounds.Width;
+            return Math.Abs(jogador.X - linhaDeFundo) <= jogador.Raio + 2;
+        }
+
+        private bool ChutarParaCompanheiroMaisProximo(Jogador portador)
+        {
+            if (timeComPosse is null)
+                return false;
+
+            float direcaoAtaque = portador.DefendeLadoEsquerdo ? 1 : -1;
+            Jogador? companheiro = timeComPosse
+                .Where(jogador =>
+                    !ReferenceEquals(jogador, portador) &&
+                    !jogador.EstaInativo &&
+                    jogador.Posicao != PosicaoJogador.Goleiro &&
+                    (jogador.X - portador.X) * direcaoAtaque > 0)
+                .OrderBy(jogador => DistanciaEntre(portador, jogador))
+                .FirstOrDefault();
+
+            if (companheiro is null)
+            {
+                ChutarParaFrente(portador);
+                timeComPosse = null;
+                jogadorComPosse = null;
+                jogadorComTempoDePosse = null;
+                tempoComPosseSegundos = 0;
+                return true;
+            }
+
+            float dx = companheiro.X - bola.X;
+            float dy = companheiro.Y - bola.Y;
+            float distancia = (float)Math.Sqrt(dx * dx + dy * dy);
+            if (distancia < 1)
+            {
+                dx = direcaoAtaque;
+                dy = 0;
+                distancia = 1;
+            }
+
+            float velocidade = portador.VelocidadeMovimento * MultiplicadorVelocidadePasse;
+            bola.VelX = dx / distancia * velocidade;
+            bola.VelY = dy / distancia * velocidade;
+            jogadorComPosse = companheiro;
+            jogadorRecuando = null;
+            tempoRecuando = 0;
+            quadrosAteNovoPasse = 40;
+            return true;
         }
 
         private (float X, float Y) CalcularPosicaoDeProtecao(Jogador portador, Jogador adversario)
@@ -387,6 +484,44 @@ namespace FutebolSimuladorMaui
             return (
                 Math.Clamp(alvoX, campoBounds.X + portador.Raio, campoBounds.X + campoBounds.Width - portador.Raio),
                 Math.Clamp(alvoY, campoBounds.Y + portador.Raio, campoBounds.Y + campoBounds.Height - portador.Raio));
+        }
+
+        private (float X, float Y) CalcularAlvoDeConducao(Jogador portador)
+        {
+            float alvoGolX = portador.DefendeLadoEsquerdo
+                ? campoBounds.X + campoBounds.Width
+                : campoBounds.X;
+            float alvoGolY = campoBounds.Y + campoBounds.Height / 2;
+            float dx = alvoGolX - portador.X;
+            float dy = alvoGolY - portador.Y;
+            float distancia = (float)Math.Sqrt(dx * dx + dy * dy);
+
+            if (distancia < 1)
+                return (portador.X, portador.Y);
+
+            return (portador.X + dx / distancia * 40, portador.Y + dy / distancia * 40);
+        }
+
+        private void ConduzirBola(Jogador portador)
+        {
+            var alvoConducao = CalcularAlvoDeConducao(portador);
+            float dx = alvoConducao.X - portador.X;
+            float dy = alvoConducao.Y - portador.Y;
+            float distancia = (float)Math.Sqrt(dx * dx + dy * dy);
+            if (distancia < 1)
+            {
+                dx = portador.DefendeLadoEsquerdo ? 1 : -1;
+                dy = 0;
+                distancia = 1;
+            }
+
+            float afastamento = portador.Raio + bola.Raio - 1;
+            bola.X = Math.Clamp(portador.X + dx / distancia * afastamento,
+                campoBounds.X + bola.Raio, campoBounds.X + campoBounds.Width - bola.Raio);
+            bola.Y = Math.Clamp(portador.Y + dy / distancia * afastamento,
+                campoBounds.Y + bola.Raio, campoBounds.Y + campoBounds.Height - bola.Raio);
+            bola.VelX = 0;
+            bola.VelY = 0;
         }
 
         private void ProtegerBola(Jogador portador, Jogador adversario)
@@ -453,10 +588,14 @@ namespace FutebolSimuladorMaui
 
         private Jogador EncontrarMaisProximo(List<Jogador> time)
         {
-            Jogador maisProximo = time[0];
+            var jogadoresAtivos = time.Where(jogador => !jogador.EstaInativo).ToArray();
+            if (jogadoresAtivos.Length == 0)
+                jogadoresAtivos = time.ToArray();
+
+            Jogador maisProximo = jogadoresAtivos[0];
             float menorDistancia = DistanciaAteBola(maisProximo);
 
-            foreach (var jogador in time.Skip(1))
+            foreach (var jogador in jogadoresAtivos.Skip(1))
             {
                 float distancia = DistanciaAteBola(jogador);
                 if (distancia < menorDistancia)
@@ -565,15 +704,27 @@ namespace FutebolSimuladorMaui
                             distancia = (float)Math.Sqrt(dx * dx + dy * dy);
                         }
 
-                        float deslocamento = (distanciaMinima - distancia) / 2;
+                        bool primeiroPodeMover = !primeiro.EstaInativo;
+                        bool segundoPodeMover = !segundo.EstaInativo;
+                        if (!primeiroPodeMover && !segundoPodeMover)
+                            continue;
+
+                        float deslocamento = (distanciaMinima - distancia) /
+                            (primeiroPodeMover && segundoPodeMover ? 2 : 1);
                         float deslocamentoX = dx / distancia * deslocamento;
                         float deslocamentoY = dy / distancia * deslocamento;
-                        primeiro.X -= deslocamentoX;
-                        primeiro.Y -= deslocamentoY;
-                        segundo.X += deslocamentoX;
-                        segundo.Y += deslocamentoY;
-                        primeiro.AplicarLimites(campoBounds, bola.X);
-                        segundo.AplicarLimites(campoBounds, bola.X);
+                        if (primeiroPodeMover)
+                        {
+                            primeiro.X -= deslocamentoX;
+                            primeiro.Y -= deslocamentoY;
+                            primeiro.AplicarLimites(campoBounds, bola.X);
+                        }
+                        if (segundoPodeMover)
+                        {
+                            segundo.X += deslocamentoX;
+                            segundo.Y += deslocamentoY;
+                            segundo.AplicarLimites(campoBounds, bola.X);
+                        }
                     }
                 }
 
@@ -587,8 +738,9 @@ namespace FutebolSimuladorMaui
             if (DistanciaAteBola(jogador) <= jogador.Raio + bola.Raio)
             {
                 float angulo = (float)(Random.Shared.NextDouble() * Math.PI * 2);
-                bola.VelX = (float)Math.Cos(angulo) * 6f;
-                bola.VelY = (float)Math.Sin(angulo) * 6f;
+                float velocidade = jogador.VelocidadeMovimento * MultiplicadorVelocidadeBola;
+                bola.VelX = (float)Math.Cos(angulo) * velocidade;
+                bola.VelY = (float)Math.Sin(angulo) * velocidade;
                 return true;
             }
 

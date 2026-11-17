@@ -142,9 +142,6 @@ namespace FutebolSimuladorMaui
             X += VelX;
             Y += VelY;
 
-            VelX *= 0.98f;
-            VelY *= 0.98f;
-
             if (X - Raio <= campo.X) { X = campo.X + Raio; VelX = -VelX; }
             if (X + Raio >= campo.X + campo.Width) { X = campo.X + campo.Width - Raio; VelX = -VelX; }
             if (Y - Raio <= campo.Y) { Y = campo.Y + Raio; VelY = -VelY; }
@@ -165,7 +162,9 @@ namespace FutebolSimuladorMaui
         private readonly float posicaoInicialX;
         private readonly float posicaoInicialY;
         private bool estaVoltandoParaPequenaArea;
-        private float velocidadeMovimento => (0.9f + Habilidade / 100f * 1.8f) * 0.7f;
+        private float tempoInativoSegundos;
+        public float VelocidadeMovimento => (0.9f + Habilidade / 100f * 1.8f) * 0.7f;
+        public bool EstaInativo => tempoInativoSegundos > 0;
 
         public Jogador(float x, float y, Color cor, PosicaoJogador posicao, int habilidade, bool defendeLadoEsquerdo)
         {
@@ -182,6 +181,9 @@ namespace FutebolSimuladorMaui
 
         public void MoverEmDirecao(float alvoX, float alvoY, RectF campo, float bolaX)
         {
+            if (EstaInativo)
+                return;
+
             if (Posicao == PosicaoJogador.Goleiro &&
                 !BolaNoCampoAdversario(bolaX, campo) &&
                 (estaVoltandoParaPequenaArea || !EstaDentroDaPequenaArea(campo)))
@@ -194,10 +196,10 @@ namespace FutebolSimuladorMaui
                 float dyRetorno = alvoRetornoY - Y;
                 float distanciaRetorno = (float)Math.Sqrt(dxRetorno * dxRetorno + dyRetorno * dyRetorno);
 
-                if (distanciaRetorno > velocidadeMovimento)
+                if (distanciaRetorno > VelocidadeMovimento)
                 {
-                    X += dxRetorno / distanciaRetorno * velocidadeMovimento;
-                    Y += dyRetorno / distanciaRetorno * velocidadeMovimento;
+                    X += dxRetorno / distanciaRetorno * VelocidadeMovimento;
+                    Y += dyRetorno / distanciaRetorno * VelocidadeMovimento;
                 }
                 else
                 {
@@ -216,8 +218,8 @@ namespace FutebolSimuladorMaui
 
             if (distancia > 2)
             {
-                X += (dx / distancia) * velocidadeMovimento;
-                Y += (dy / distancia) * velocidadeMovimento;
+                X += (dx / distancia) * VelocidadeMovimento;
+                Y += (dy / distancia) * VelocidadeMovimento;
             }
 
             AplicarLimites(campo, bolaX);
@@ -298,6 +300,17 @@ namespace FutebolSimuladorMaui
         {
             X = posicaoInicialX;
             Y = posicaoInicialY;
+            tempoInativoSegundos = 0;
+        }
+
+        public void InativarPor(float segundos)
+        {
+            tempoInativoSegundos = Math.Max(tempoInativoSegundos, segundos);
+        }
+
+        public void AtualizarInatividade(float deltaSegundos)
+        {
+            tempoInativoSegundos = Math.Max(0, tempoInativoSegundos - deltaSegundos);
         }
 
         public void Desenhar(ICanvas canvas)
